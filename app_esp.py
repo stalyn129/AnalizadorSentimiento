@@ -2,7 +2,11 @@
 import streamlit as st
 from textblob import TextBlob
 from deep_translator import GoogleTranslator
-import streamlit.components.v1 as components
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
+import speech_recognition as sr
+import av
+import queue
+import pydub
 
 
 # ================================
@@ -15,28 +19,24 @@ st.set_page_config(
     layout="centered"
 )
 
-# CSS personalizado mejorado
+# CSS personalizado
 st.markdown("""
 <style>
-    /* Ocultar elementos de Streamlit */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Fuente moderna */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
     
-    /* Espaciado general */
     .block-container {
         padding-top: 2rem !important;
         max-width: 900px;
     }
     
-    /* Botones */
     .stButton > button {
         border-radius: 12px;
         font-weight: 600;
@@ -50,7 +50,6 @@ st.markdown("""
         box-shadow: 0 8px 16px rgba(0,0,0,0.15);
     }
     
-    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
@@ -61,20 +60,12 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* Text area */
     .stTextArea textarea {
         border-radius: 12px;
         border: 2px solid #e5e7eb;
         font-size: 16px;
-        transition: border-color 0.3s ease;
     }
     
-    .stTextArea textarea:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    }
-    
-    /* Animación suave */
     .fade-in {
         animation: fadeIn 0.6s ease-in;
     }
@@ -84,7 +75,6 @@ st.markdown("""
         to { opacity: 1; transform: translateY(0); }
     }
     
-    /* Animación de pulso */
     .pulse {
         animation: pulse 2s infinite;
     }
@@ -92,38 +82,6 @@ st.markdown("""
     @keyframes pulse {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.05); }
-    }
-    
-    /* Botón de micrófono personalizado */
-    #micButton {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border: none;
-        border-radius: 50%;
-        width: 120px;
-        height: 120px;
-        font-size: 3rem;
-        cursor: pointer;
-        box-shadow: 0 8px 16px rgba(102, 126, 234, 0.3);
-        transition: all 0.3s ease;
-        margin: 20px auto;
-        display: block;
-    }
-    
-    #micButton:hover {
-        transform: scale(1.05);
-        box-shadow: 0 12px 24px rgba(102, 126, 234, 0.4);
-    }
-    
-    #micButton.recording {
-        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-        animation: pulse 1s infinite;
-    }
-    
-    #status {
-        text-align: center;
-        font-weight: 600;
-        margin: 1rem 0;
-        font-size: 1.1rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -152,32 +110,31 @@ def analizar_sentimiento(texto):
 def obtener_emoji_sentimiento(polaridad):
     """Retorna emoji y clasificación según la polaridad"""
     if polaridad > 0.5:
-        return "😄", "Muy Positivo", "#10b981", "¡Excelente! Tu mensaje irradia felicidad y optimismo."
+        return "😄", "Muy Positivo", "#10b981", "¡Excelente! Tu mensaje irradia felicidad."
     elif polaridad > 0.1:
-        return "😊", "Positivo", "#34d399", "Tu mensaje tiene un tono positivo y agradable."
+        return "😊", "Positivo", "#34d399", "Tu mensaje tiene un tono positivo."
     elif polaridad < -0.5:
-        return "😢", "Muy Negativo", "#dc2626", "Tu mensaje refleja emociones negativas muy fuertes."
+        return "😢", "Muy Negativo", "#dc2626", "Tu mensaje refleja emociones muy negativas."
     elif polaridad < -0.1:
-        return "😔", "Negativo", "#ef4444", "Tu mensaje tiene un tono negativo o de preocupación."
+        return "😔", "Negativo", "#ef4444", "Tu mensaje tiene un tono negativo."
     else:
-        return "😐", "Neutral", "#f59e0b", "Tu mensaje es neutral, sin emociones marcadas."
+        return "😐", "Neutral", "#f59e0b", "Tu mensaje es neutral."
 
 
 def mostrar_resultados(texto, polaridad, subjetividad, texto_ingles):
-    """Muestra los resultados del análisis de forma visual"""
+    """Muestra los resultados del análisis"""
     
     emoji, sentimiento, color, descripcion = obtener_emoji_sentimiento(polaridad)
     
     st.markdown("---")
     st.markdown("<h2 style='text-align: center; color: #1f2937; margin: 2rem 0;'>📊 Resultados del Análisis</h2>", unsafe_allow_html=True)
     
-    # Texto analizado
     st.markdown(f"""
     <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                 padding: 1.5rem; border-radius: 16px; margin: 1.5rem 0; 
                 box-shadow: 0 4px 12px rgba(0,0,0,0.1);' class='fade-in'>
         <p style='margin: 0; color: rgba(255,255,255,0.9); font-size: 0.875rem; 
-                   font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;'>
+                   font-weight: 600; text-transform: uppercase;'>
             📝 Texto Analizado
         </p>
         <p style='margin: 0.75rem 0 0 0; color: white; font-size: 1.25rem; 
@@ -187,50 +144,45 @@ def mostrar_resultados(texto, polaridad, subjetividad, texto_ingles):
     </div>
     """, unsafe_allow_html=True)
     
-    # Card principal del sentimiento
     st.markdown(f"""
     <div style='background: white; padding: 3rem 2rem; border-radius: 20px; 
                 text-align: center; margin: 2rem 0; 
                 box-shadow: 0 8px 16px rgba(0,0,0,0.1); 
                 border-top: 6px solid {color};' class='fade-in'>
-        <div style='font-size: 5rem; margin-bottom: 1rem; line-height: 1;' class='pulse'>{emoji}</div>
+        <div style='font-size: 5rem; margin-bottom: 1rem;' class='pulse'>{emoji}</div>
         <h2 style='margin: 0; font-weight: 700; font-size: 2.5rem; color: {color};'>
             {sentimiento}
         </h2>
-        <p style='margin: 1rem 0 0.5rem 0; color: #6b7280; font-size: 1rem; line-height: 1.6;'>
+        <p style='margin: 1rem 0; color: #6b7280; font-size: 1rem;'>
             {descripcion}
         </p>
-        <p style='margin: 0.5rem 0 0 0; color: #9ca3af; font-size: 0.875rem;'>
-            Nivel de confianza: <strong>{abs(polaridad):.2f}</strong>
+        <p style='color: #9ca3af; font-size: 0.875rem;'>
+            Confianza: <strong>{abs(polaridad):.2f}</strong>
         </p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Métricas en columnas
     col1, col2 = st.columns(2)
     
     with col1:
         valor_normalizado = int((polaridad + 1) * 50)
         st.markdown(f"""
         <div style='background: white; padding: 1.5rem; border-radius: 16px; 
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
-                    border: 1px solid #f3f4f6;' class='fade-in'>
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.08);' class='fade-in'>
             <p style='margin: 0 0 0.75rem 0; color: #6b7280; font-size: 0.875rem; 
                        font-weight: 600;'>
-                📊 POLARIDAD EMOCIONAL
+                📊 POLARIDAD
             </p>
             <div style='background: #f3f4f6; border-radius: 999px; height: 12px; 
                         overflow: hidden; margin: 0.75rem 0;'>
                 <div style='background: {color}; height: 100%; width: {valor_normalizado}%; 
                             transition: width 1s ease;'></div>
             </div>
-            <p style='margin: 0.5rem 0 0 0; color: #111827; font-weight: 700; 
-                       font-size: 2.25rem;'>
+            <p style='margin: 0.5rem 0; color: #111827; font-weight: 700; font-size: 2rem;'>
                 {polaridad:.3f}
             </p>
-            <p style='margin: 0.5rem 0 0 0; color: #9ca3af; font-size: 0.75rem; 
-                       line-height: 1.4;'>
-                -1.0 (muy negativo) → +1.0 (muy positivo)
+            <p style='color: #9ca3af; font-size: 0.75rem;'>
+                -1.0 (negativo) → +1.0 (positivo)
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -239,148 +191,66 @@ def mostrar_resultados(texto, polaridad, subjetividad, texto_ingles):
         porcentaje = int(subjetividad * 100)
         st.markdown(f"""
         <div style='background: white; padding: 1.5rem; border-radius: 16px; 
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
-                    border: 1px solid #f3f4f6;' class='fade-in'>
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.08);' class='fade-in'>
             <p style='margin: 0 0 0.75rem 0; color: #6b7280; font-size: 0.875rem; 
                        font-weight: 600;'>
                 🎭 SUBJETIVIDAD
             </p>
             <div style='background: #f3f4f6; border-radius: 999px; height: 12px; 
                         overflow: hidden; margin: 0.75rem 0;'>
-                <div style='background: linear-gradient(90deg, #8b5cf6, #6d28d9); 
-                            height: 100%; width: {porcentaje}%; 
+                <div style='background: #8b5cf6; height: 100%; width: {porcentaje}%; 
                             transition: width 1s ease;'></div>
             </div>
-            <p style='margin: 0.5rem 0 0 0; color: #111827; font-weight: 700; 
-                       font-size: 2.25rem;'>
+            <p style='margin: 0.5rem 0; color: #111827; font-weight: 700; font-size: 2rem;'>
                 {porcentaje}%
             </p>
-            <p style='margin: 0.5rem 0 0 0; color: #9ca3af; font-size: 0.75rem; 
-                       line-height: 1.4;'>
-                0% = objetivo → 100% = opinión
+            <p style='color: #9ca3af; font-size: 0.75rem;'>
+                0% (objetivo) → 100% (opinión)
             </p>
         </div>
         """, unsafe_allow_html=True)
     
-    # Interpretación
-    st.markdown("<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True)
     st.markdown("### 📖 Interpretación")
     
     if polaridad > 0.5:
-        st.success("🎉 **Mensaje Muy Positivo:** Tu texto transmite mucha energía positiva y optimismo.")
+        st.success("🎉 **Muy Positivo:** Tu mensaje transmite mucha energía positiva.")
     elif polaridad > 0.1:
-        st.success("😊 **Mensaje Positivo:** Tu texto tiene un tono agradable y favorable.")
+        st.success("😊 **Positivo:** Tu mensaje tiene un tono agradable.")
     elif polaridad < -0.5:
-        st.error("😢 **Mensaje Muy Negativo:** Tu texto refleja emociones negativas fuertes.")
+        st.error("😢 **Muy Negativo:** Tu mensaje refleja emociones negativas fuertes.")
     elif polaridad < -0.1:
-        st.warning("😔 **Mensaje Negativo:** Tu texto tiene un tono de preocupación.")
+        st.warning("😔 **Negativo:** Tu mensaje tiene un tono de preocupación.")
     else:
-        st.info("😐 **Mensaje Neutral:** Tu texto es objetivo y no expresa emociones marcadas.")
+        st.info("😐 **Neutral:** Tu mensaje es objetivo.")
     
-    if subjetividad > 0.7:
-        st.info("💭 **Muy Subjetivo:** Tu mensaje es principalmente una opinión personal.")
-    elif subjetividad > 0.4:
-        st.info("🤔 **Mixto:** Tu mensaje combina opiniones con hechos.")
+    if subjetividad > 0.6:
+        st.info("💭 **Muy Subjetivo:** Principalmente opinión personal.")
+    elif subjetividad > 0.3:
+        st.info("🤔 **Mixto:** Combina opiniones y hechos.")
     else:
-        st.info("📊 **Objetivo:** Tu mensaje está basado en hechos y datos.")
+        st.info("📊 **Objetivo:** Basado en hechos.")
     
-    with st.expander("🔬 Ver detalles técnicos"):
-        st.markdown("**🌐 Traducción al inglés:**")
+    with st.expander("🔬 Detalles técnicos"):
         st.code(texto_ingles, language=None)
-        st.json({
-            "Polaridad": round(polaridad, 4),
-            "Subjetividad": round(subjetividad, 4),
-            "Clasificación": sentimiento
-        })
+        st.json({"Polaridad": round(polaridad, 4), "Subjetividad": round(subjetividad, 4)})
 
 
-# Componente HTML para reconocimiento de voz del navegador
-def speech_recognition_component():
-    html_code = """
-    <div style="text-align: center; padding: 20px;">
-        <button id="micButton" onclick="toggleRecording()">🎤</button>
-        <div id="status" style="color: #667eea;">Presiona el micrófono para hablar</div>
-        <div id="transcript" style="margin-top: 20px; padding: 15px; background: #f3f4f6; border-radius: 12px; min-height: 60px; display: none;">
-            <strong>Texto reconocido:</strong>
-            <p id="transcriptText" style="margin: 10px 0 0 0; color: #1f2937;"></p>
-        </div>
-    </div>
+# Cola para procesar audio
+audio_queue = queue.Queue()
+
+class AudioProcessor:
+    def __init__(self):
+        self.frames = []
     
-    <script>
-        let recognition;
-        let isRecording = false;
-        
-        // Verificar soporte del navegador
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.lang = 'es-ES';
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            
-            recognition.onstart = function() {
-                document.getElementById('status').textContent = '🎙️ Escuchando... Habla ahora';
-                document.getElementById('status').style.color = '#ef4444';
-            };
-            
-            recognition.onresult = function(event) {
-                const transcript = event.results[0][0].transcript;
-                document.getElementById('transcriptText').textContent = transcript;
-                document.getElementById('transcript').style.display = 'block';
-                document.getElementById('status').textContent = '✅ Texto capturado exitosamente';
-                document.getElementById('status').style.color = '#10b981';
-                
-                // Enviar el texto a Streamlit
-                window.parent.postMessage({
-                    type: 'streamlit:setComponentValue',
-                    value: transcript
-                }, '*');
-            };
-            
-            recognition.onerror = function(event) {
-                let errorMsg = 'Error al reconocer voz';
-                if (event.error === 'no-speech') {
-                    errorMsg = '❌ No se detectó voz. Intenta de nuevo';
-                } else if (event.error === 'not-allowed') {
-                    errorMsg = '❌ Permiso denegado. Permite el acceso al micrófono';
-                }
-                document.getElementById('status').textContent = errorMsg;
-                document.getElementById('status').style.color = '#ef4444';
-                document.getElementById('micButton').classList.remove('recording');
-                isRecording = false;
-            };
-            
-            recognition.onend = function() {
-                document.getElementById('micButton').classList.remove('recording');
-                isRecording = false;
-                if (document.getElementById('status').style.color !== '#10b981') {
-                    document.getElementById('status').textContent = 'Presiona el micrófono para hablar';
-                    document.getElementById('status').style.color = '#667eea';
-                }
-            };
-        } else {
-            document.getElementById('status').textContent = '❌ Tu navegador no soporta reconocimiento de voz';
-            document.getElementById('status').style.color = '#ef4444';
-            document.getElementById('micButton').disabled = true;
-        }
-        
-        function toggleRecording() {
-            if (!recognition) return;
-            
-            if (isRecording) {
-                recognition.stop();
-                document.getElementById('micButton').classList.remove('recording');
-                isRecording = false;
-            } else {
-                recognition.start();
-                document.getElementById('micButton').classList.add('recording');
-                isRecording = true;
-            }
-        }
-    </script>
-    """
-    
-    return components.html(html_code, height=300)
+    def recv(self, frame):
+        sound = pydub.AudioSegment(
+            data=frame.to_ndarray().tobytes(),
+            sample_width=frame.format.bytes,
+            frame_rate=frame.sample_rate,
+            channels=len(frame.layout.channels),
+        )
+        self.frames.append(sound)
+        return frame
 
 
 # ================================
@@ -388,14 +258,13 @@ def speech_recognition_component():
 # ================================
 
 if 'texto_espanol' not in st.session_state:
-    st.session_state.texto_espanol = "¡Estoy muy feliz de aprender inteligencia artificial con esta aplicación!"
+    st.session_state.texto_espanol = "¡Estoy muy feliz de aprender inteligencia artificial!"
 
 
 # ================================
 # INTERFAZ PRINCIPAL
 # ================================
 
-# Título
 st.markdown("""
 <div style='text-align: center; margin-bottom: 2rem;'>
     <h1 style='font-weight: 300; margin-bottom: 0; color: #374151;'>
@@ -407,7 +276,7 @@ st.markdown("""
         Sentimientos con IA
     </h1>
     <p style='color: #6b7280; font-size: 1.1rem; margin: 1rem 0 0.5rem 0;'>
-        Habla o escribe en español y la IA detectará el tono emocional
+        Habla o escribe en español para detectar el tono emocional
     </p>
     <p style='color: #9ca3af; font-size: 0.95rem;'>
         👨‍💻 Desarrollado por <strong style='color: #667eea;'>Joel Pesantez</strong>
@@ -415,11 +284,9 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+tab1, tab2 = st.tabs(["🎙️ Grabar Audio", "✍️ Escribir Texto"])
 
-# Tabs
-tab1, tab2 = st.tabs(["🎙️ Hablar por Micrófono", "✍️ Escribir Texto"])
-
-# TAB 1: VOZ
+# TAB 1: AUDIO
 with tab1:
     st.markdown("""
     <div style='background: #f0f9ff; padding: 1.5rem; border-radius: 12px; 
@@ -428,22 +295,52 @@ with tab1:
             🎙️ Instrucciones:
         </p>
         <ol style='margin: 0; color: #4b5563; line-height: 1.8;'>
-            <li>Presiona el botón del <strong>micrófono 🎤</strong></li>
-            <li><strong>Permite el acceso</strong> al micrófono en tu navegador</li>
+            <li>Presiona <strong>"START"</strong> para iniciar la grabación</li>
             <li><strong>Habla claramente</strong> en español</li>
-            <li>El texto se capturará <strong>automáticamente</strong></li>
+            <li>Presiona <strong>"STOP"</strong> cuando termines</li>
+            <li>Presiona <strong>"Transcribir Audio"</strong> para convertir a texto</li>
         </ol>
     </div>
     """, unsafe_allow_html=True)
     
-    # Componente de reconocimiento de voz
-    texto_reconocido = speech_recognition_component()
+    # Grabador WebRTC
+    webrtc_ctx = webrtc_streamer(
+        key="speech-to-text",
+        mode=WebRtcMode.SENDONLY,
+        audio_receiver_size=1024,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        media_stream_constraints={"video": False, "audio": True},
+        audio_frame_callback=AudioProcessor().recv,
+    )
     
-    # Si hay texto reconocido, guardarlo
-    if texto_reconocido:
-        st.session_state.texto_espanol = texto_reconocido
-        st.success(f"✅ Texto capturado: **{texto_reconocido}**")
-        st.info("👇 Desplázate hacia abajo y presiona 'Analizar Sentimiento'")
+    st.info("💡 **Tip:** Después de grabar, presiona el botón de abajo para transcribir")
+    
+    if st.button("🎤 Transcribir Audio Grabado", type="primary", use_container_width=True):
+        if webrtc_ctx.audio_processor and webrtc_ctx.audio_processor.frames:
+            with st.spinner("🔄 Procesando audio..."):
+                try:
+                    # Combinar todos los frames de audio
+                    combined_audio = sum(webrtc_ctx.audio_processor.frames)
+                    
+                    # Guardar temporalmente
+                    combined_audio.export("temp_audio.wav", format="wav")
+                    
+                    # Reconocer con SpeechRecognition
+                    recognizer = sr.Recognizer()
+                    with sr.AudioFile("temp_audio.wav") as source:
+                        audio_data = recognizer.record(source)
+                        texto = recognizer.recognize_google(audio_data, language="es-ES")
+                        
+                        st.session_state.texto_espanol = texto
+                        st.success(f"✅ **Texto reconocido:** {texto}")
+                        st.info("👇 Desplázate y presiona 'Analizar Sentimiento'")
+                        
+                except sr.UnknownValueError:
+                    st.error("❌ No pude entender el audio. Intenta hablar más claro.")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        else:
+            st.warning("⚠️ Primero graba audio presionando START")
 
 # TAB 2: TEXTO
 with tab2:
@@ -451,63 +348,52 @@ with tab2:
     <div style='background: #fef3c7; padding: 1.25rem; border-radius: 12px; 
                 border-left: 4px solid #f59e0b; margin-bottom: 1.5rem;'>
         <p style='margin: 0; color: #92400e; font-weight: 500;'>
-            ✍️ Escribe tu mensaje y presiona "Analizar Sentimiento"
+            ✍️ Escribe tu mensaje
         </p>
     </div>
     """, unsafe_allow_html=True)
     
     st.session_state.texto_espanol = st.text_area(
-        "Ingresa tu texto aquí:",
+        "Ingresa tu texto:",
         value=st.session_state.texto_espanol,
         height=180,
-        key="text_input",
-        placeholder="Ejemplo: Hoy fue un día increíble, aprendí muchas cosas nuevas..."
+        placeholder="Ejemplo: Hoy fue un día increíble..."
     )
 
-
-# Botón de análisis
+# Botón análisis
 st.markdown("---")
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    analizar_btn = st.button(
-        "🔍 Analizar Sentimiento",
-        type="primary",
-        use_container_width=True
-    )
-
-if analizar_btn:
-    if st.session_state.texto_espanol and st.session_state.texto_espanol.strip():
-        with st.spinner("🧠 Analizando el sentimiento..."):
-            polaridad, subjetividad, texto_ingles = analizar_sentimiento(
-                st.session_state.texto_espanol
-            )
-            
-            if polaridad is not None:
-                mostrar_resultados(
-                    st.session_state.texto_espanol,
-                    polaridad,
-                    subjetividad,
-                    texto_ingles
+    if st.button("🔍 Analizar Sentimiento", type="primary", use_container_width=True):
+        if st.session_state.texto_espanol and st.session_state.texto_espanol.strip():
+            with st.spinner("🧠 Analizando..."):
+                polaridad, subjetividad, texto_ingles = analizar_sentimiento(
+                    st.session_state.texto_espanol
                 )
-    else:
-        st.warning("⚠️ Por favor, habla o escribe un mensaje para analizar.")
-
+                
+                if polaridad is not None:
+                    mostrar_resultados(
+                        st.session_state.texto_espanol,
+                        polaridad,
+                        subjetividad,
+                        texto_ingles
+                    )
+        else:
+            st.warning("⚠️ Escribe o graba un mensaje primero.")
 
 # Footer
-st.markdown("<div style='margin-top: 4rem;'></div>", unsafe_allow_html=True)
-
 st.markdown("""
-<div style='margin-top: 3rem; padding: 2rem; 
+<div style='margin-top: 4rem; padding: 2rem; 
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
             border-radius: 20px; text-align: center;'>
     <p style='margin: 0; color: white; font-size: 1.2rem; font-weight: 600;'>
         🚀 Analizador de Sentimientos con IA
     </p>
-    <p style='margin: 0.5rem 0; color: rgba(255,255,255,0.95); font-size: 1rem;'>
+    <p style='margin: 0.5rem 0; color: rgba(255,255,255,0.95);'>
         Desarrollado por <strong>Joel Pesantez</strong>
     </p>
     <p style='margin: 1rem 0 0 0; color: rgba(255,255,255,0.85); font-size: 0.85rem;'>
-        🧠 TextBlob • 🌐 GoogleTranslator • 🎤 Web Speech API
+        🧠 TextBlob • 🌐 GoogleTranslator • 🎤 WebRTC
     </p>
 </div>
 """, unsafe_allow_html=True)
